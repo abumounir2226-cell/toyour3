@@ -19,21 +19,8 @@ export default function Pagination({
   hasPrevPage,
   onPageChange,
 }: PaginationProps) {
-  // ✅ التأكد من عرض مكون الترقيم
-  console.log("🔧 Pagination Component Props:", {
-    currentPage,
-    totalPages,
-    totalProducts,
-    hasNextPage,
-    hasPrevPage,
-  });
-
   if (totalPages <= 1) {
-    return (
-      <div className="text-center text-gray-500 py-4">
-        صفحة {currentPage} من {totalPages} • {totalProducts} منتج
-      </div>
-    );
+    return null;
   }
 
   // ✅ إنشاء مصفوفة من أرقام الصفحات
@@ -52,13 +39,11 @@ export default function Pagination({
   }
 
   return (
-    <div className="flex flex-col sm:flex-row justify-between items-center gap-6 mt-8 p-6 bg-white rounded-xl shadow-sm border border-gray-200">
+    <div className="flex flex-col sm:flex-row justify-between items-center gap-4 p-4 bg-white rounded-xl shadow-sm border border-gray-200">
       {/* معلومات الترقيم */}
-      <div className="text-gray-700">
-        <span className="font-medium">عرض</span>{" "}
-        {Math.min((currentPage - 1) * limit + 1, totalProducts)} -{" "}
-        {Math.min(currentPage * limit, totalProducts)}{" "}
-        <span className="font-medium">من</span> {totalProducts} منتج
+      <div className="text-sm text-gray-600">
+        <span className="font-medium">المنتجات:</span> {totalProducts} منتج •
+        <span className="font-medium mr-2"> الصفحات:</span> {totalPages} صفحة
       </div>
 
       {/* أزرار الصفحات */}
@@ -67,7 +52,7 @@ export default function Pagination({
         <button
           onClick={() => onPageChange(currentPage - 1)}
           disabled={!hasPrevPage}
-          className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+          className={`px-3 sm:px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
             hasPrevPage
               ? "bg-blue-100 text-blue-700 hover:bg-blue-200"
               : "bg-gray-100 text-gray-400 cursor-not-allowed"
@@ -82,7 +67,7 @@ export default function Pagination({
             <>
               <button
                 onClick={() => onPageChange(1)}
-                className="w-10 h-10 flex items-center justify-center rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-100"
+                className="w-8 h-8 sm:w-10 sm:h-10 flex items-center justify-center rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-100"
               >
                 1
               </button>
@@ -94,7 +79,7 @@ export default function Pagination({
             <button
               key={pageNum}
               onClick={() => onPageChange(pageNum)}
-              className={`w-10 h-10 flex items-center justify-center rounded-lg text-sm font-medium transition-colors ${
+              className={`w-8 h-8 sm:w-10 sm:h-10 flex items-center justify-center rounded-lg text-sm font-medium transition-colors ${
                 currentPage === pageNum
                   ? "bg-blue-600 text-white shadow-sm"
                   : "text-gray-700 hover:bg-gray-100"
@@ -111,7 +96,7 @@ export default function Pagination({
               )}
               <button
                 onClick={() => onPageChange(totalPages)}
-                className="w-10 h-10 flex items-center justify-center rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-100"
+                className="w-8 h-8 sm:w-10 sm:h-10 flex items-center justify-center rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-100"
               >
                 {totalPages}
               </button>
@@ -123,7 +108,7 @@ export default function Pagination({
         <button
           onClick={() => onPageChange(currentPage + 1)}
           disabled={!hasNextPage}
-          className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+          className={`px-3 sm:px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
             hasNextPage
               ? "bg-blue-100 text-blue-700 hover:bg-blue-200"
               : "bg-gray-100 text-gray-400 cursor-not-allowed"
@@ -133,8 +118,8 @@ export default function Pagination({
         </button>
       </div>
 
-      {/* معلومات الصفحات */}
-      <div className="text-gray-600">
+      {/* معلومات الصفحة الحالية */}
+      <div className="text-sm text-gray-600">
         <span className="font-medium">الصفحة</span> {currentPage}{" "}
         <span className="font-medium">من</span> {totalPages}
       </div>
