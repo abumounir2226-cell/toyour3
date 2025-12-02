@@ -10,7 +10,7 @@ export async function GET(request: Request) {
     const sub = searchParams.get("sub");
     const search = searchParams.get("search");
     const page = parseInt(searchParams.get("page") || "1");
-    const limit = parseInt(searchParams.get("limit") || "20");
+    const limit = parseInt(searchParams.get("limit") || "10000"); // ✅ جلب كل المنتجات مرة واحدة
 
     console.log("🔍 جلب المنتجات للعميل:", {
       category,
@@ -41,6 +41,8 @@ export async function GET(request: Request) {
     // ✅ بناء شروط الفلترة الديناميكية
     const whereConditions: any = {
       cur_qty: { gt: 0 },
+      // ✅ إضافة هذا الشرط المهم: جلب المنتجات من المخزن الرئيسي فقط
+      stor_id: 0, // هذا يحل مشكلة الصور
     };
 
     // ✅ إضافة فلترة التصنيف
@@ -107,6 +109,16 @@ export async function GET(request: Request) {
 
     console.log(`📊 جميع المنتجات الخام من DB: ${allProductsRaw.length} منتج`);
 
+    // ✅ تسجيل أول 5 منتجات للتحقق من الصور
+    console.log("🖼️ عينة من الصور في قاعدة البيانات:");
+    allProductsRaw.slice(0, 5).forEach((row, index) => {
+      console.log(
+        `${index + 1}. ${row.item_code}: ${
+          row.images ? row.images.substring(0, 50) + "..." : "لا توجد صورة"
+        }`
+      );
+    });
+
     // ✅ 2. تجميع المنتجات حسب master_code
     const groupedByMasterCode: { [key: string]: any } = {};
 
@@ -138,10 +150,27 @@ export async function GET(request: Request) {
       );
 
       if (!variant) {
-        const imageUrl =
-          row.images && row.images.trim() !== ""
-            ? row.images
-            : "https://images.unsplash.com/photo-1441986300917-64674bd600d8?w=500";
+        // ✅ حل مشكلة الصور بشكل أفضل
+        let imageUrl =
+          "https://images.unsplash.com/photo-1441986300917-64674bd600d8?w=500";
+
+        if (row.images) {
+          const img = row.images.trim();
+          if (img !== "" && img !== "null" && img !== "NULL") {
+            // ✅ التحقق من أن الصورة ليست base64 صغير
+            if (img.startsWith("data:image") && img.length < 100) {
+              console.warn(
+                `⚠️ صورة base64 صغيرة جداً لـ ${row.item_code}: ${img.length} حرف`
+              );
+            } else {
+              imageUrl = img;
+            }
+          }
+        }
+
+        console.log(
+          `🖼️ المنتج ${row.item_code} - الصورة: ${imageUrl.substring(0, 80)}...`
+        );
 
         variant = {
           id: row.unique_id,
@@ -167,13 +196,25 @@ export async function GET(request: Request) {
 
     console.log(`🎯 المنتجات بعد التجميع: ${allGroupedProducts.length} موديل`);
 
+    // ✅ حساب المنتجات التي لديها صور حقيقية
+    const productsWithRealImages = allGroupedProducts.filter((product) => {
+      return product.variants.some(
+        (variant) =>
+          !variant.imageUrl.includes("unsplash.com") &&
+          !variant.imageUrl.includes("via.placeholder")
+      );
+    });
+    console.log(
+      `🖼️ المنتجات بصور حقيقية: ${productsWithRealImages.length}/${allGroupedProducts.length}`
+    );
+
     // ✅ 4. حساب الترقيم على الموديلات المجمعة
     const totalProducts = allGroupedProducts.length;
-    const totalPages = Math.ceil(totalProducts / limit);
-    const skip = (page - 1) * limit;
+    const totalPages = Math.ceil(totalProducts / 20); // ✅ 20 منتج لكل صفحة دائماً
+    const skip = (page - 1) * 20; // ✅ استخدم 20 ثابتة للترقيم
 
     // ✅ 5. أخذ الجزء المطلوب فقط للصفحة الحالية
-    const paginatedProducts = allGroupedProducts.slice(skip, skip + limit);
+    const paginatedProducts = allGroupedProducts.slice(skip, skip + 20);
 
     console.log(
       `📄 الترقيم: صفحة ${page} من ${totalPages}, عرض ${paginatedProducts.length} موديل`
@@ -202,6 +243,7 @@ export async function GET(request: Request) {
     const stats = {
       totalRawProducts: allProductsRaw.length,
       totalGroupedProducts: allGroupedProducts.length,
+      productsWithRealImages: productsWithRealImages.length,
       filteredByCategory: categoryName ? "نعم" : "لا",
       filteredBySub: sub ? "نعم" : "لا",
       filteredBySearch: search ? "نعم" : "لا",
@@ -209,11 +251,11 @@ export async function GET(request: Request) {
         currentPage: page,
         totalPages,
         totalProducts,
-        limit,
+        limit: 20, // ✅ ثابت
         hasNextPage,
         hasPrevPage,
         skip,
-        take: limit,
+        take: 20,
       },
     };
 
@@ -227,7 +269,7 @@ export async function GET(request: Request) {
         currentPage: page,
         totalPages: totalPages,
         totalProducts: totalProducts,
-        limit: limit,
+        limit: 20, // ✅ ثابت
         hasNextPage: hasNextPage,
         hasPrevPage: hasPrevPage,
       },
@@ -258,99 +300,5 @@ export async function GET(request: Request) {
       },
       error: "حدث خطأ في تحميل البيانات",
     });
-  }
-}
-
-// ✅ POST: إضافة منتج جديد
-export async function POST(request: Request) {
-  try {
-    const data = await request.json();
-
-    console.log("📝 إنشاء منتج جديد:", data);
-
-    // التحقق من البيانات المطلوبة
-    if (!data.master_code || !data.item_name) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: "master_code و item_name مطلوبان",
-        },
-        { status: 400 }
-      );
-    }
-
-    // إنشاء unique_id
-    const type_id = data.type_id || 0;
-    const stor_id = data.stor_id || 0;
-    const unique_id = `${data.master_code}-${type_id}-${stor_id}`;
-
-    // التحقق من عدم وجود منتج بنفس unique_id
-    const existingProduct = await prisma.products.findUnique({
-      where: { unique_id: unique_id },
-    });
-
-    if (existingProduct) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: "المنتج موجود مسبقاً",
-        },
-        { status: 400 }
-      );
-    }
-
-    // إنشاء المنتج
-    const newProduct = await prisma.products.create({
-      data: {
-        unique_id: unique_id,
-        master_code: data.master_code,
-        item_code: data.item_code || data.master_code,
-        item_name: data.item_name,
-        color: data.color || "افتراضي",
-        size: data.size || "ONE SIZE",
-        out_price: parseFloat(data.out_price) || 0,
-        av_price: parseFloat(data.av_price) || parseFloat(data.out_price) || 0,
-        cur_qty: parseInt(data.cur_qty) || 0,
-        group_name: data.group_name || "عام",
-        kind_name: data.kind_name || "عام",
-        images: data.images || "",
-        stor_id: stor_id,
-        type_id: type_id,
-        // الحقول الإضافية المطلوبة
-        item_id: 0,
-        unit_id: 0,
-        unit_convert: 1.0,
-        multi_unit: false,
-        multi_type: false,
-        unit_def1_id: 0,
-        group_id: 0,
-        class_id: 0,
-        is_basic_unit: true,
-        kind_id: 0,
-        place_id: 0,
-        unit_name_id: 0,
-        unit_name: "قطعة",
-        class_name: data.group_name || "عام",
-        place_name: "المخزن الرئيسي",
-      },
-    });
-
-    console.log("✅ تم إنشاء المنتج:", newProduct.unique_id);
-
-    return NextResponse.json({
-      success: true,
-      message: "تم إنشاء المنتج بنجاح",
-      product: newProduct,
-    });
-  } catch (error) {
-    console.error("❌ Error creating product:", error);
-
-    return NextResponse.json(
-      {
-        success: false,
-        error: "فشل في إنشاء المنتج: " + error.message,
-      },
-      { status: 500 }
-    );
   }
 }
