@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useAuth } from "../../context/AuthContext";
 import Link from "next/link";
 
@@ -20,6 +20,7 @@ interface Product {
     sizes: string[];
     cur_qty?: number;
     stor_id?: number;
+    totalColorQuantity?: number;
   }>;
   cur_qty?: number;
   stor_id?: number;
@@ -31,20 +32,118 @@ interface ProductCardProps {
   product: Product;
 }
 
+// ✅ سنخزن كميات الموظف في متغير خارجي
+let employeeQuantitiesCache: Map<string, number> = new Map();
+
 export default function ProductCard({ product }: ProductCardProps) {
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const [isHovered, setIsHovered] = useState(false);
   const { isEmployee } = useAuth();
+  const [currentQuantity, setCurrentQuantity] = useState<number | null>(null);
 
-  // ✅ التحقق من توفر المنتج للموظفين - الآن من اللون الحالي
-  const getAvailableQuantity = () => {
-    if (isEmployee && product.variants[currentImageIndex]?.stor_id === 0) {
-      return product.variants[currentImageIndex]?.cur_qty || 0;
+  // ✅ جلب كميات الموظف عند تحميل المكون
+  useEffect(() => {
+    const fetchEmployeeQuantities = async () => {
+      if (!isEmployee || currentQuantity !== null) return;
+
+      try {
+        // ✅ تحقق إذا كانت الكمية مخزنة في الكاش
+        const cacheKey = `${product.modelId}-${product.variants[currentImageIndex]?.color}`;
+        if (employeeQuantitiesCache.has(cacheKey)) {
+          setCurrentQuantity(employeeQuantitiesCache.get(cacheKey) || null);
+          return;
+        }
+
+        console.log(`📥 جلب كمية المنتج: ${product.modelId}`);
+        const response = await fetch("/api/products/employee");
+
+        if (response.ok) {
+          const data = await response.json();
+          const productsList = data.products || [];
+
+          // ✅ البحث عن المنتج الحالي في بيانات الموظف
+          const employeeProduct = productsList.find(
+            (p: Product) =>
+              p.modelId === product.modelId ||
+              p.master_code === product.master_code
+          );
+
+          if (employeeProduct) {
+            // ✅ البحث عن اللون الحالي
+            const currentColor = product.variants[currentImageIndex]?.color;
+            const variant = employeeProduct.variants?.find(
+              (v: any) => v.color === currentColor
+            );
+
+            if (variant) {
+              const quantity =
+                variant.totalColorQuantity || variant.cur_qty || 0;
+              setCurrentQuantity(quantity);
+              employeeQuantitiesCache.set(cacheKey, quantity);
+              console.log(`✅ كمية المنتج ${product.modelId}: ${quantity}`);
+            } else {
+              // ✅ إذا لم يجد اللون، حاول مع أول لون
+              const firstVariant = employeeProduct.variants?.[0];
+              if (firstVariant) {
+                const quantity =
+                  firstVariant.totalColorQuantity || firstVariant.cur_qty || 0;
+                setCurrentQuantity(quantity);
+                employeeQuantitiesCache.set(cacheKey, quantity);
+              } else {
+                setCurrentQuantity(0);
+                employeeQuantitiesCache.set(cacheKey, 0);
+              }
+            }
+          } else {
+            // ✅ إذا لم يجد المنتج، فهو غير متوفر
+            setCurrentQuantity(0);
+            employeeQuantitiesCache.set(cacheKey, 0);
+            console.log(
+              `⚠️ المنتج ${product.modelId} غير موجود في كميات الموظف`
+            );
+          }
+        }
+      } catch (error) {
+        console.warn("⚠️ لا يمكن جلب كميات الموظف:", error);
+        setCurrentQuantity(null);
+      }
+    };
+
+    if (isEmployee) {
+      fetchEmployeeQuantities();
     }
-    return null;
+  }, [
+    isEmployee,
+    product.modelId,
+    product.master_code,
+    product.variants,
+    currentImageIndex,
+  ]);
+
+  // ✅ الحصول على الكمية للعرض
+  const getDisplayQuantity = () => {
+    if (!isEmployee) return null;
+
+    // ✅ إذا كان لدينا كمية محدثة من API
+    if (currentQuantity !== null) {
+      return currentQuantity;
+    }
+
+    // ✅ حاول من البيانات المحلية
+    const variant = product.variants[currentImageIndex];
+    if (variant?.cur_qty !== undefined) {
+      return variant.cur_qty;
+    }
+
+    if (variant?.totalColorQuantity !== undefined) {
+      return variant.totalColorQuantity;
+    }
+
+    // ✅ إذا لم توجد أي كمية
+    return 0;
   };
 
-  const availableQuantity = getAvailableQuantity();
+  const availableQuantity = getDisplayQuantity();
 
   const getProductName = () => {
     const desc = product.description.trim();
@@ -56,28 +155,24 @@ export default function ProductCard({ product }: ProductCardProps) {
     "https://via.placeholder.com/270x360/FFFFFF/666666?text=No+Image";
 
   // ✅ تحديد لون حالة الكمية
-  const getQuantityColor = () => {
-    if (!availableQuantity && availableQuantity !== 0) return "";
-
-    if (availableQuantity === 0)
-      return "bg-red-100 text-red-800 border-red-200";
-    if (availableQuantity <= 5)
-      return "bg-yellow-100 text-yellow-800 border-yellow-200";
+  const getQuantityColor = (qty: number | null) => {
+    if (qty === null) return "bg-blue-100 text-blue-800 border-blue-200";
+    if (qty === 0) return "bg-red-100 text-red-800 border-red-200";
+    if (qty <= 5) return "bg-yellow-100 text-yellow-800 border-yellow-200";
     return "bg-green-100 text-green-800 border-green-200";
   };
 
   // ✅ تحديد نص حالة الكمية
-  const getQuantityText = () => {
-    if (!availableQuantity && availableQuantity !== 0) return "";
-
-    if (availableQuantity === 0) return "⛔ غير متوفر";
-    if (availableQuantity <= 5) return `⚠️ آخر ${availableQuantity}`;
-    return `✅ متوفر (${availableQuantity})`;
+  const getQuantityText = (qty: number | null) => {
+    if (qty === null) return "📥 جاري التحقق...";
+    if (qty === 0) return "⛔ غير متوفر";
+    if (qty <= 5) return `⚠️ آخر ${qty}`;
+    return `✅ متوفر (${qty})`;
   };
 
   // دالة لتحويل اسم اللون إلى قيمة hex
   const getColorHex = (colorName: string) => {
-    const colorMap = {
+    const colorMap: { [key: string]: string } = {
       أحمر: "#ef4444",
       أخضر: "#22c55e",
       أزرق: "#3b82f6",
@@ -116,11 +211,13 @@ export default function ProductCard({ product }: ProductCardProps) {
         />
 
         {/* ✅ شارة الكمية للموظفين فقط */}
-        {isEmployee && availableQuantity !== null && (
+        {isEmployee && (
           <div
-            className={`absolute top-3 left-3 px-3 py-1.5 rounded-full text-xs font-semibold border ${getQuantityColor()} shadow-sm`}
+            className={`absolute top-3 left-3 px-3 py-1.5 rounded-full text-xs font-semibold border ${getQuantityColor(
+              availableQuantity
+            )} shadow-sm`}
           >
-            {getQuantityText()}
+            {getQuantityText(availableQuantity)}
           </div>
         )}
 
@@ -154,6 +251,17 @@ export default function ProductCard({ product }: ProductCardProps) {
                         e.preventDefault();
                         e.stopPropagation();
                         setCurrentImageIndex(index);
+
+                        // ✅ عند تغيير اللون، أعد تعيين الكمية
+                        if (isEmployee) {
+                          setCurrentQuantity(null);
+                          const cacheKey = `${product.modelId}-${variant.color}`;
+                          if (employeeQuantitiesCache.has(cacheKey)) {
+                            setCurrentQuantity(
+                              employeeQuantitiesCache.get(cacheKey) || null
+                            );
+                          }
+                        }
                       }}
                       className={`relative group/color transition-all duration-300 ${
                         currentImageIndex === index
@@ -266,7 +374,27 @@ export default function ProductCard({ product }: ProductCardProps) {
           </div>
         )}
 
-        {/* ✅ زر عرض التفاصيل بدلاً من إضافة إلى السلة */}
+        {/* ✅ معلومات الكمية الإضافية للموظف */}
+        {isEmployee && availableQuantity !== null && (
+          <div className="mt-2 mb-3">
+            <div
+              className={`text-xs px-3 py-2 rounded-lg ${getQuantityColor(
+                availableQuantity
+              )}`}
+            >
+              <div className="flex items-center justify-between">
+                <span className="font-medium">المخزن:</span>
+                <span>
+                  {availableQuantity === 0
+                    ? "غير متوفر"
+                    : `${availableQuantity} قطعة`}
+                </span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ✅ زر عرض التفاصيل */}
         <Link
           href={`/product/${product.modelId}`}
           className="mt-auto w-full py-3 px-4 rounded-xl text-sm font-semibold transition-all duration-300 flex items-center justify-center space-x-2 space-x-reverse shadow-md hover:shadow-lg transform hover:translate-y-[-1px] active:translate-y-0 bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white"

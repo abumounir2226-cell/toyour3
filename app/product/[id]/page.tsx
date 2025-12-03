@@ -29,6 +29,16 @@ interface Product {
   stor_id?: number;
 }
 
+interface QuantityData {
+  [modelId: string]: {
+    [color: string]: {
+      totalQty: number;
+      sizes: { [size: string]: number };
+      itemCodes: { [size: string]: string };
+    };
+  };
+}
+
 export default function ProductDetail() {
   const params = useParams();
   const productId = params.id as string;
@@ -40,8 +50,11 @@ export default function ProductDetail() {
   const [quantity, setQuantity] = useState(1);
   const [similarProducts, setSimilarProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
+  const [employeeQuantities, setEmployeeQuantities] = useState<QuantityData>(
+    {}
+  );
 
-  // ✅ التحقق من حالة الموظف من localStorage مباشرة
+  // ✅ التحقق من حالة الموظف
   const isEmployee = () => {
     try {
       const employee = localStorage.getItem("employee");
@@ -54,67 +67,335 @@ export default function ProductDetail() {
 
   const employee = isEmployee();
 
-  // ✅ جلب تفاصيل المنتج من الـ API مباشرة
+  // ✅ دالة واحدة لجلب كل كميات الموظفين (بدون قيود)
+  const fetchAllEmployeeQuantities = async () => {
+    try {
+      console.log("📥 جلب جميع كميات المخزن للموظف...");
+
+      // ✅ محاولة جلب كل الصفحات
+      let allProducts: Product[] = [];
+      let page = 1;
+      let hasMore = true;
+
+      while (hasMore) {
+        try {
+          // ✅ إضافة معامل page أو offset إذا كان الـ API يدعمه
+          const url = `/api/products/employee?page=${page}&limit=100`;
+          console.log(`📄 جلب الصفحة ${page}...`);
+
+          const response = await fetch(url);
+
+          if (!response.ok) {
+            console.warn(`⚠️ فشل جلب الصفحة ${page}: ${response.status}`);
+            break;
+          }
+
+          const data = await response.json();
+          const products = data.products || [];
+          console.log(`📊 الصفحة ${page}: ${products.length} منتج`);
+
+          if (products.length === 0) {
+            hasMore = false;
+          } else {
+            allProducts = [...allProducts, ...products];
+            page++;
+
+            // ✅ إذا كنا نحصل على نفس البيانات، نتوقف
+            if (products.length < 50) {
+              hasMore = false;
+            }
+          }
+        } catch (pageError) {
+          console.error(`❌ خطأ في الصفحة ${page}:`, pageError);
+          hasMore = false;
+        }
+      }
+
+      console.log(`📦 إجمالي كميات الموظف: ${allProducts.length} منتج`);
+
+      // ✅ إنشاء خريطة للكميات
+      const quantityMap: QuantityData = {};
+
+      allProducts.forEach((product: Product) => {
+        if (!product.modelId) return;
+
+        if (!quantityMap[product.modelId]) {
+          quantityMap[product.modelId] = {};
+        }
+
+        product.variants?.forEach((variant) => {
+          if (!variant.color) return;
+
+          const colorKey = variant.color;
+          if (!quantityMap[product.modelId][colorKey]) {
+            quantityMap[product.modelId][colorKey] = {
+              totalQty: 0,
+              sizes: {},
+              itemCodes: {},
+            };
+          }
+
+          // تجميع الكميات
+          quantityMap[product.modelId][colorKey].totalQty =
+            variant.totalColorQuantity || variant.cur_qty || 0;
+
+          // كميات المقاسات
+          if (variant.sizeQuantities) {
+            quantityMap[product.modelId][colorKey].sizes = {
+              ...variant.sizeQuantities,
+            };
+          }
+
+          // item codes للمقاسات
+          if (variant.sizeItemCodes) {
+            quantityMap[product.modelId][colorKey].itemCodes = {
+              ...variant.sizeItemCodes,
+            };
+          }
+
+          // item code عام
+          if (
+            variant.itemCode &&
+            !quantityMap[product.modelId][colorKey].itemCodes["default"]
+          ) {
+            quantityMap[product.modelId][colorKey].itemCodes["default"] =
+              variant.itemCode;
+          }
+        });
+      });
+
+      setEmployeeQuantities(quantityMap);
+      console.log(
+        "✅ تم تحميل جميع كميات الموظف:",
+        Object.keys(quantityMap).length,
+        "منتج"
+      );
+
+      return quantityMap;
+    } catch (error) {
+      console.error("❌ خطأ في جلب كميات الموظف:", error);
+
+      // ✅ محاولة جلب مرة واحدة فقط
+      try {
+        const response = await fetch("/api/products/employee");
+        if (response.ok) {
+          const data = await response.json();
+          const productsList = data.products || [];
+
+          const quantityMap: QuantityData = {};
+
+          productsList.forEach((product: Product) => {
+            if (!product.modelId) return;
+
+            if (!quantityMap[product.modelId]) {
+              quantityMap[product.modelId] = {};
+            }
+
+            product.variants?.forEach((variant) => {
+              if (!variant.color) return;
+
+              const colorKey = variant.color;
+              if (!quantityMap[product.modelId][colorKey]) {
+                quantityMap[product.modelId][colorKey] = {
+                  totalQty: 0,
+                  sizes: {},
+                  itemCodes: {},
+                };
+              }
+
+              quantityMap[product.modelId][colorKey].totalQty =
+                variant.totalColorQuantity || variant.cur_qty || 0;
+
+              if (variant.sizeQuantities) {
+                quantityMap[product.modelId][colorKey].sizes = {
+                  ...variant.sizeQuantities,
+                };
+              }
+
+              if (variant.sizeItemCodes) {
+                quantityMap[product.modelId][colorKey].itemCodes = {
+                  ...variant.sizeItemCodes,
+                };
+              }
+            });
+          });
+
+          setEmployeeQuantities(quantityMap);
+          console.log(
+            "✅ تم تحميل كميات الموظف (محدودة):",
+            Object.keys(quantityMap).length,
+            "منتج"
+          );
+          return quantityMap;
+        }
+      } catch (fallbackError) {
+        console.error("❌ فشل في جلب أي كميات:", fallbackError);
+      }
+
+      return {};
+    }
+  };
+
+  // ✅ جلب تفاصيل المنتج
   const fetchProductDetails = async () => {
     try {
       setLoading(true);
       console.log(`🔍 جلب تفاصيل المنتج: ${productId}`);
-      
-      const isEmployeeUser = isEmployee();
-      const endpoint = isEmployeeUser ? "/api/products/employee" : "/api/products";
-      
-      // ✅ جلب جميع المنتجات للبحث عن المنتج الحالي
-      const url = `${endpoint}?limit=10000`;
-      console.log(`🌐 جلب المنتجات من: ${url}`);
-      
-      const response = await fetch(url);
-      
+      console.log(`👤 حالة الموظف: ${employee}`);
+
+      // ✅ إذا كان موظفاً، جلب جميع الكميات أولاً
+      let quantityMap: QuantityData = {};
+      if (employee) {
+        console.log("👔 موظف - جلب كميات المخزن...");
+        quantityMap = await fetchAllEmployeeQuantities();
+      }
+
+      // ✅ جلب كل المنتجات من getAllData
+      const endpoint = "/api/getAllData";
+      console.log(`🌐 جلب البيانات من: ${endpoint}`);
+
+      const response = await fetch(endpoint);
+
       if (!response.ok) {
-        throw new Error("فشل في جلب البيانات");
+        throw new Error(`فشل في جلب البيانات: ${response.status}`);
       }
 
       const data = await response.json();
-      console.log(`📦 المنتجات المستلمة: ${data.products?.length || 0} منتج`);
+      const productsList: Product[] = data.products || [];
+      console.log(`📦 المنتجات الأساسية: ${productsList.length} منتج`);
 
       // ✅ البحث عن المنتج الحالي
-      const foundProduct = data.products?.find((p: Product) => p.modelId === productId);
-      
+      let foundProduct: Product | undefined;
+
+      // البحث بطرق مختلفة
+      foundProduct = productsList.find((p) => p.modelId === productId);
+
+      if (!foundProduct) {
+        foundProduct = productsList.find((p) => p.master_code === productId);
+      }
+
+      if (!foundProduct) {
+        foundProduct = productsList.find((p) => p.item_code === productId);
+      }
+
       if (foundProduct) {
         console.log(`✅ وجدت المنتج: ${foundProduct.description}`);
-        setProduct(foundProduct);
+        console.log(`🔍 البحث عن كميات للمنتج: ${foundProduct.modelId}`);
 
-        // ✅ البحث عن المنتجات المشابهة (نفس التصنيف)
-        const similar = data.products
-          ?.filter(
-            (p: Product) =>
-              p.modelId !== productId && 
-              p.category === foundProduct.category
+        // ✅ تطبيق كميات الموظف على المنتج
+        let enhancedProduct = { ...foundProduct };
+
+        if (employee && quantityMap[foundProduct.modelId]) {
+          console.log("🎯 وجدت كميات الموظف لهذا المنتج");
+          const productQuantities = quantityMap[foundProduct.modelId];
+
+          enhancedProduct.variants =
+            enhancedProduct.variants?.map((variant) => {
+              const color = variant.color;
+              const colorData = productQuantities[color];
+
+              if (colorData) {
+                return {
+                  ...variant,
+                  cur_qty: colorData.totalQty,
+                  totalColorQuantity: colorData.totalQty,
+                  sizeQuantities: { ...colorData.sizes },
+                  sizeItemCodes: { ...colorData.itemCodes },
+                  stor_id: colorData.totalQty > 0 ? 0 : undefined,
+                };
+              } else {
+                console.log(`⚠️ لا توجد كميات للون: ${color}`);
+                // ✅ إذا لم توجد كميات، نعرض المنتج بدون كمية
+                return {
+                  ...variant,
+                  cur_qty: 0,
+                  totalColorQuantity: 0,
+                  stor_id: undefined,
+                };
+              }
+            }) || [];
+        } else if (employee) {
+          console.log("⚠️ لا توجد كميات مخزن لهذا المنتج");
+          // ✅ للموظفين: إذا لم توجد كميات، نعرض المنتج لكن غير متوفر
+          enhancedProduct.variants =
+            enhancedProduct.variants?.map((variant) => ({
+              ...variant,
+              cur_qty: 0,
+              totalColorQuantity: 0,
+              stor_id: undefined,
+            })) || [];
+        }
+
+        setProduct(enhancedProduct);
+
+        // ✅ البحث عن المنتجات المشابهة
+        const similar = productsList
+          .filter(
+            (p) =>
+              p.modelId !== enhancedProduct.modelId &&
+              p.category === enhancedProduct.category
           )
           .slice(0, 4);
 
-        setSimilarProducts(similar || []);
+        // ✅ تطبيق كميات الموظف على المنتجات المشابهة
+        let enhancedSimilar = similar;
+        if (employee) {
+          enhancedSimilar = similar.map((p) => {
+            const similarQuantities = quantityMap[p.modelId];
+            if (similarQuantities) {
+              const enhanced = { ...p };
+              enhanced.variants =
+                enhanced.variants?.map((variant) => {
+                  const colorData = similarQuantities[variant.color];
+                  if (colorData) {
+                    return {
+                      ...variant,
+                      cur_qty: colorData.totalQty,
+                      totalColorQuantity: colorData.totalQty,
+                      sizeQuantities: { ...colorData.sizes },
+                      sizeItemCodes: { ...colorData.itemCodes },
+                      stor_id: colorData.totalQty > 0 ? 0 : undefined,
+                    };
+                  }
+                  return {
+                    ...variant,
+                    cur_qty: 0,
+                    totalColorQuantity: 0,
+                    stor_id: undefined,
+                  };
+                }) || [];
+              return enhanced;
+            }
+            // ✅ إذا لم توجد كميات، نعرض المنتج لكن غير متوفر للموظف
+            const noQtyProduct = { ...p };
+            noQtyProduct.variants =
+              noQtyProduct.variants?.map((variant) => ({
+                ...variant,
+                cur_qty: 0,
+                totalColorQuantity: 0,
+                stor_id: undefined,
+              })) || [];
+            return noQtyProduct;
+          });
+        }
 
-        if (foundProduct.variants && foundProduct.variants.length > 0) {
-          setSelectedColor(foundProduct.variants[0].color);
-          if (foundProduct.variants[0].sizes && foundProduct.variants[0].sizes.length > 0) {
-            setSelectedSize(foundProduct.variants[0].sizes[0]);
+        setSimilarProducts(enhancedSimilar);
+
+        // ✅ تعيين القيم الافتراضية
+        if (enhancedProduct.variants && enhancedProduct.variants.length > 0) {
+          setSelectedColor(enhancedProduct.variants[0].color);
+          if (
+            enhancedProduct.variants[0].sizes &&
+            enhancedProduct.variants[0].sizes.length > 0
+          ) {
+            setSelectedSize(enhancedProduct.variants[0].sizes[0]);
           }
         }
       } else {
         console.log(`❌ المنتج غير موجود: ${productId}`);
-        
-        // ✅ محاولة البحث بطرق أخرى (master_code)
-        const foundByMasterCode = data.products?.find((p: Product) => 
-          p.master_code === productId || p.item_code === productId
-        );
-        
-        if (foundByMasterCode) {
-          console.log(`✅ وجدت المنتج بالـ master_code: ${foundByMasterCode.description}`);
-          setProduct(foundByMasterCode);
-        }
       }
     } catch (error) {
-      console.error("Error fetching product:", error);
+      console.error("❌ Error fetching product:", error);
     } finally {
       setLoading(false);
     }
@@ -124,39 +405,31 @@ export default function ProductDetail() {
     fetchProductDetails();
   }, [productId]);
 
-  // ✅ إعادة المحاولة إذا فشل التحميل
-  useEffect(() => {
-    if (!loading && !product) {
-      const timer = setTimeout(() => {
-        console.log("🔄 إعادة محاولة جلب المنتج...");
-        fetchProductDetails();
-      }, 2000);
-      return () => clearTimeout(timer);
-    }
-  }, [loading, product]);
-
   const selectedVariant = product?.variants?.find(
     (v) => v.color === selectedColor
   );
 
   // ✅ الحصول على الكمية الإجمالية للون
   const getTotalColorQuantity = (color: string) => {
+    if (!employee) return 999; // للعملاء: دائماً متوفر
+
     const variant = product?.variants?.find((v) => v.color === color);
     if (!variant) return 0;
 
-    if (variant.totalColorQuantity !== undefined) {
-      return variant.totalColorQuantity;
-    }
-
-    return variant.cur_qty || 0;
+    return variant.totalColorQuantity || variant.cur_qty || 0;
   };
 
   // ✅ الحصول على الكمية للمقاس المحدد
   const getSizeQuantity = () => {
+    if (!employee) return 999; // للعملاء: دائماً متوفر
+
     if (!selectedVariant || !selectedSize) return 0;
 
-    if (selectedVariant.sizeQuantities) {
-      return selectedVariant.sizeQuantities[selectedSize] || 0;
+    if (
+      selectedVariant.sizeQuantities &&
+      selectedVariant.sizeQuantities[selectedSize] !== undefined
+    ) {
+      return selectedVariant.sizeQuantities[selectedSize];
     }
 
     return selectedVariant.cur_qty || 0;
@@ -166,15 +439,37 @@ export default function ProductDetail() {
   const getCurrentItemCode = () => {
     if (!selectedVariant) return product?.item_code || "";
 
+    let itemCode = "";
+
     if (
       selectedSize &&
       selectedVariant.sizeItemCodes &&
       selectedVariant.sizeItemCodes[selectedSize]
     ) {
-      return selectedVariant.sizeItemCodes[selectedSize];
+      itemCode = selectedVariant.sizeItemCodes[selectedSize];
     }
 
-    return selectedVariant.itemCode || product?.item_code || "";
+    if (
+      !itemCode &&
+      selectedVariant.sizeItemCodes &&
+      selectedVariant.sizeItemCodes["default"]
+    ) {
+      itemCode = selectedVariant.sizeItemCodes["default"];
+    }
+
+    if (!itemCode && selectedVariant.itemCode) {
+      itemCode = selectedVariant.itemCode;
+    }
+
+    if (!itemCode && product?.item_code) {
+      itemCode = product.item_code;
+    }
+
+    if (!itemCode && product?.master_code) {
+      itemCode = product.master_code;
+    }
+
+    return itemCode || "غير محدد";
   };
 
   const currentSizeQuantity = getSizeQuantity();
@@ -184,37 +479,51 @@ export default function ProductDetail() {
     if (!product) return;
 
     if (employee && currentSizeQuantity === 0) {
-      alert("هذا المنتج غير متوفر حالياً");
+      alert("⛔ هذا المنتج غير متوفر حالياً في المخزن");
       return;
     }
 
+    const cartItemCode = `${
+      product.master_code || product.modelId
+    }-${selectedColor}-${selectedSize}`;
+
     addToCart(
-      product,
+      {
+        ...product,
+        item_code: currentItemCode,
+        unique_id: cartItemCode,
+      },
       selectedColor || "افتراضي",
       selectedSize || "ONE SIZE",
       quantity
     );
-    alert(`تم إضافة "${product.description}" إلى السلة`);
+    alert(`✅ تم إضافة "${product.description}" إلى السلة`);
   };
 
   const handleWhatsApp = () => {
     if (!product) return;
 
     const productCode = product.master_code || product.modelId;
+    const availability = employee
+      ? currentSizeQuantity > 0
+        ? `متوفر: ${currentSizeQuantity} قطعة`
+        : "غير متوفر"
+      : "متوفر";
+
     const message = `السلام عليكم\nأريد الاستفسار عن المنتج:\n${
       product.description
-    }\nالكود: ${productCode}\nكود المنتج: ${
+    }\n\n📦 **معلومات المنتج:**\n- الكود: ${productCode}\n- كود المنتج: ${
       currentItemCode || "غير محدد"
-    }\nاللون: ${selectedColor || "غير محدد"}\nالمقاس: ${
+    }\n- اللون: ${selectedColor || "غير محدد"}\n- المقاس: ${
       selectedSize || "غير محدد"
-    }\nالسعر: ${product.price} ج.م`;
+    }\n- السعر: ${product.price} ج.م\n- الحالة: ${availability}`;
+
     const whatsappUrl = `https://wa.me/201234567890?text=${encodeURIComponent(
       message
     )}`;
     window.open(whatsappUrl, "_blank");
   };
 
-  // ✅ عند تغيير اللون، إعادة تعيين الحجم
   const handleColorSelect = (color: string) => {
     setSelectedColor(color);
     const newVariant = product?.variants?.find((v) => v.color === color);
@@ -225,7 +534,6 @@ export default function ProductDetail() {
     }
   };
 
-  // ✅ عند تغيير المقاس
   const handleSizeSelect = (size: string) => {
     setSelectedSize(size);
   };
@@ -239,9 +547,11 @@ export default function ProductDetail() {
 
   // ✅ تحديد نص حالة الكمية
   const getQuantityText = (qty: number, size?: string) => {
+    if (!employee) return "✅ متوفر";
+
     if (qty === 0) return "⛔ غير متوفر";
     if (qty <= 5) return `⚠️ آخر ${qty}`;
-    
+
     if (size) {
       return `✅ متوفر (${qty}) - ${size}`;
     }
@@ -257,7 +567,14 @@ export default function ProductDetail() {
             <div className="text-center">
               <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
               <p className="mt-4 text-gray-600">جاري تحميل المنتج...</p>
-              <p className="text-sm text-gray-500 mt-1">رقم المنتج: {productId}</p>
+              <p className="text-sm text-gray-500 mt-1">
+                رقم المنتج: {productId}
+              </p>
+              {employee && (
+                <p className="text-xs text-blue-600 mt-2">
+                  🔍 جلب كميات المخزن للموظف...
+                </p>
+              )}
             </div>
           </div>
         </div>
@@ -276,7 +593,10 @@ export default function ProductDetail() {
               <h2 className="text-xl font-medium text-gray-900 mb-2">
                 المنتج غير موجود
               </h2>
-              <p className="text-gray-600 mb-6">رقم المنتج: {productId}</p>
+              <p className="text-gray-600 mb-2">رقم المنتج: {productId}</p>
+              {employee && (
+                <p className="text-sm text-blue-600 mb-4">👔 كنت تبحث كموظف</p>
+              )}
               <div className="flex gap-3 justify-center">
                 <button
                   onClick={() => window.history.back()}
@@ -310,7 +630,7 @@ export default function ProductDetail() {
       <main className="max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
         <button
           onClick={() => window.history.back()}
-          className="flex items-center text-gray-600 hover:text-gray-900 mb-6"
+          className="flex items-center text-gray-600 hover:text-gray-900 mb-6 hover:bg-gray-100 px-3 py-2 rounded-lg transition-colors"
         >
           <svg
             className="w-5 h-5 ml-1"
@@ -328,41 +648,55 @@ export default function ProductDetail() {
           العودة للمنتجات
         </button>
 
+        {/* ✅ بادئة معلومات المستخدم */}
+        <div className="mb-4 flex justify-end">
+          <div className="flex items-center gap-3">
+            <span
+              className={`text-xs sm:text-sm px-3 py-1.5 rounded-full font-medium ${
+                employee
+                  ? "bg-blue-100 text-blue-800 border border-blue-200"
+                  : "bg-green-100 text-green-800 border border-green-200"
+              }`}
+            >
+              {employee ? "👔 وضع الموظف" : "👤 عميل"}
+            </span>
+
+            {employee && Object.keys(employeeQuantities).length > 0 && (
+              <span className="text-xs text-gray-600 bg-gray-100 px-2 py-1 rounded">
+                {Object.keys(employeeQuantities).length} منتج مع كميات ✓
+              </span>
+            )}
+          </div>
+        </div>
+
         <div className="bg-white rounded-lg shadow-lg overflow-hidden mb-12">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-8 p-8">
             {/* صور المنتج */}
             <div>
-              <div className="aspect-[3/4] overflow-hidden rounded-lg bg-white">
+              <div className="aspect-[3/4] overflow-hidden rounded-lg bg-white border border-gray-200">
                 <img
                   src={
                     mainImage ||
                     "https://via.placeholder.com/600x800/FFFFFF/666666?text=No+Image"
                   }
                   alt={product.description}
-                  className="w-full h-full object-contain"
+                  className="w-full h-full object-contain p-4"
+                  onError={(e) => {
+                    e.currentTarget.src =
+                      "https://via.placeholder.com/600x800/EFEFEF/666666?text=No+Image";
+                  }}
                 />
               </div>
 
-              {/* صور مصغرة */}
-              {product.variants && product.variants.length > 1 && (
-                <div className="grid grid-cols-4 gap-2 mt-4">
-                  {product.variants.slice(0, 4).map((variant) => (
-                    <button
-                      key={variant.id}
-                      onClick={() => handleColorSelect(variant.color)}
-                      className={`aspect-[3/4] rounded border-2 overflow-hidden bg-white ${
-                        selectedColor === variant.color
-                          ? "border-blue-600"
-                          : "border-gray-300"
-                      }`}
-                    >
-                      <img
-                        src={variant.imageUrl}
-                        alt={variant.color}
-                        className="w-full h-full object-contain"
-                      />
-                    </button>
-                  ))}
+              {/* ✅ ملاحظة للموظف حول الكميات */}
+              {employee && (
+                <div className="mt-4 p-3 bg-blue-50 rounded-lg border border-blue-200">
+                  <p className="text-sm text-blue-700">
+                    <span className="font-medium">ملاحظة للموظف:</span>
+                    {currentSizeQuantity > 0
+                      ? ` هذا المنتج متوفر (${currentSizeQuantity} قطعة)`
+                      : " هذا المنتج غير متوفر حالياً في المخزن"}
+                  </p>
                 </div>
               )}
             </div>
@@ -375,23 +709,18 @@ export default function ProductDetail() {
                 </h1>
                 <p className="text-gray-600 mt-2">{product.category}</p>
 
-                {/* ✅ عرض master_code */}
-                {masterCode && (
-                  <div className="mt-2">
-                    <span className="text-sm bg-gray-100 text-gray-600 px-2 py-1 rounded-md font-mono">
-                      الكود: {masterCode}
-                    </span>
-                  </div>
-                )}
+                {/* ✅ عرض الأكواد */}
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <span className="text-sm bg-gray-100 text-gray-600 px-2 py-1 rounded-md font-mono">
+                    الكود: {masterCode}
+                  </span>
 
-                {/* ✅ عرض item_code للموظفين فقط */}
-                {employee && currentItemCode && (
-                  <div className="mt-1">
+                  {employee && currentItemCode && (
                     <span className="text-sm bg-blue-100 text-blue-700 px-2 py-1 rounded-md font-mono">
                       كود المنتج: {currentItemCode}
                     </span>
-                  </div>
-                )}
+                  )}
+                </div>
               </div>
 
               <div className="flex items-center space-x-4">
@@ -400,26 +729,25 @@ export default function ProductDetail() {
                 </span>
 
                 {/* ✅ شارة الكمية */}
-                {employee ? (
-                  <span
-                    className={`px-3 py-1 rounded-full text-sm font-medium ${getQuantityColor(
-                      currentSizeQuantity
-                    )}`}
-                  >
-                    {getQuantityText(currentSizeQuantity, selectedSize)}
-                  </span>
-                ) : (
-                  <span className="text-green-600 bg-green-50 px-3 py-1 rounded-full text-sm">
-                    متوفر
-                  </span>
-                )}
+                <span
+                  className={`px-3 py-1 rounded-full text-sm font-medium ${getQuantityColor(
+                    currentSizeQuantity
+                  )}`}
+                >
+                  {getQuantityText(currentSizeQuantity, selectedSize)}
+                </span>
               </div>
 
               {/* اختيار اللون */}
               {product.variants && product.variants.length > 0 && (
                 <div>
                   <h3 className="text-lg font-medium text-gray-900 mb-3">
-                    اللون
+                    اللون{" "}
+                    {employee && (
+                      <span className="text-sm text-gray-500">
+                        (مع الكميات)
+                      </span>
+                    )}
                   </h3>
                   <div className="flex flex-wrap gap-3">
                     {product.variants.map((variant) => {
@@ -428,15 +756,19 @@ export default function ProductDetail() {
                         <button
                           key={variant.id}
                           onClick={() => handleColorSelect(variant.color)}
-                          className={`px-4 py-2 border-2 rounded-lg transition-colors flex flex-col items-center ${
+                          className={`px-4 py-2 border-2 rounded-lg transition-colors flex flex-col items-center min-w-24 ${
                             selectedColor === variant.color
-                              ? "border-blue-600 bg-blue-50 text-blue-700"
-                              : "border-gray-300 text-gray-700 hover:border-gray-400"
+                              ? "border-blue-600 bg-blue-50 text-blue-700 shadow-sm"
+                              : "border-gray-300 text-gray-700 hover:border-gray-400 hover:bg-gray-50"
                           }`}
                         >
-                          <span>{variant.color}</span>
+                          <span className="font-medium">{variant.color}</span>
                           {employee && (
-                            <span className="text-xs text-gray-500 mt-1">
+                            <span
+                              className={`text-xs mt-1 px-2 py-0.5 rounded-full ${getQuantityColor(
+                                totalQty
+                              )}`}
+                            >
                               {totalQty} قطعة
                             </span>
                           )}
@@ -451,22 +783,42 @@ export default function ProductDetail() {
               {selectedVariant?.sizes && selectedVariant.sizes.length > 0 && (
                 <div>
                   <h3 className="text-lg font-medium text-gray-900 mb-3">
-                    المقاس
+                    المقاس{" "}
+                    {employee && (
+                      <span className="text-sm text-gray-500">
+                        (مع الكميات)
+                      </span>
+                    )}
                   </h3>
                   <div className="flex flex-wrap gap-3">
-                    {selectedVariant.sizes.map((size) => (
-                      <button
-                        key={size}
-                        onClick={() => handleSizeSelect(size)}
-                        className={`px-4 py-2 border-2 rounded-lg transition-colors flex flex-col items-center ${
-                          selectedSize === size
-                            ? "border-blue-600 bg-blue-50 text-blue-700"
-                            : "border-gray-300 text-gray-700 hover:border-gray-400"
-                        }`}
-                      >
-                        <span>{size}</span>
-                      </button>
-                    ))}
+                    {selectedVariant.sizes.map((size) => {
+                      const sizeQty =
+                        selectedVariant.sizeQuantities?.[size] || 0;
+                      const displayQty = employee ? sizeQty : 999;
+
+                      return (
+                        <button
+                          key={size}
+                          onClick={() => handleSizeSelect(size)}
+                          className={`px-4 py-2 border-2 rounded-lg transition-colors flex flex-col items-center min-w-20 ${
+                            selectedSize === size
+                              ? "border-blue-600 bg-blue-50 text-blue-700 shadow-sm"
+                              : "border-gray-300 text-gray-700 hover:border-gray-400 hover:bg-gray-50"
+                          }`}
+                        >
+                          <span className="font-medium">{size}</span>
+                          {employee && (
+                            <span
+                              className={`text-xs mt-1 px-2 py-0.5 rounded-full ${getQuantityColor(
+                                displayQty
+                              )}`}
+                            >
+                              {displayQty}
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -476,23 +828,35 @@ export default function ProductDetail() {
                 <h3 className="text-lg font-medium text-gray-900 mb-3">
                   الكمية
                 </h3>
-                <div className="flex items-center border border-gray-300 rounded-lg w-fit">
+                <div className="flex items-center border border-gray-300 rounded-lg w-fit overflow-hidden">
                   <button
                     onClick={() => setQuantity(Math.max(1, quantity - 1))}
-                    className="px-4 py-2 text-gray-600 hover:text-gray-800 hover:bg-gray-100 transition-colors"
+                    className="px-4 py-2 text-gray-600 hover:text-gray-800 hover:bg-gray-100 transition-colors border-r border-gray-300"
+                    disabled={employee && currentSizeQuantity === 0}
                   >
                     -
                   </button>
-                  <span className="px-4 py-2 border-l border-r border-gray-300 min-w-12 text-center">
+                  <span className="px-4 py-2 min-w-12 text-center font-medium">
                     {quantity}
                   </span>
                   <button
                     onClick={() => setQuantity(quantity + 1)}
-                    className="px-4 py-2 text-gray-600 hover:text-gray-800 hover:bg-gray-100 transition-colors"
+                    className="px-4 py-2 text-gray-600 hover:text-gray-800 hover:bg-gray-100 transition-colors border-l border-gray-300"
+                    disabled={employee && quantity >= currentSizeQuantity}
                   >
                     +
                   </button>
                 </div>
+                {employee && currentSizeQuantity > 0 && (
+                  <p className="text-sm text-gray-600 mt-2">
+                    متوفر: {currentSizeQuantity} قطعة
+                  </p>
+                )}
+                {employee && currentSizeQuantity === 0 && (
+                  <p className="text-sm text-red-600 mt-2">
+                    ⚠️ غير متوفر حالياً في المخزن
+                  </p>
+                )}
               </div>
 
               {/* الأزرار جنباً إلى جنب */}
@@ -550,6 +914,14 @@ export default function ProductDetail() {
                   <li>• ضمان 30 يوم</li>
                   <li>• شحن مجاني للطلبات فوق 200 ج.م</li>
                   <li>• إرجاع خلال 14 يوم</li>
+                  {employee && (
+                    <>
+                      <li>• 👔 للموظفين: عرض كميات المخزن الحقيقية</li>
+                      <li>
+                        • 👔 للموظفين: كود المنتج الدقيق: {currentItemCode}
+                      </li>
+                    </>
+                  )}
                 </ul>
               </div>
             </div>
