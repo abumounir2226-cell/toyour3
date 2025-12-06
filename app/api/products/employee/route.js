@@ -8,14 +8,38 @@ export async function GET(request) {
     const url = new URL(request.url);
     const searchParams = url.searchParams;
     const category = searchParams.get("category");
+    const page = parseInt(searchParams.get("page") || "1");
+    const limit = parseInt(searchParams.get("limit") || "20");
 
-    // ✅ جلب المنتجات للموظفين بشرط cur_qty > 0 و stor_id = 0
-    const productsRaw = await prisma.products.findMany({
+    console.log("🔍 جلب المنتجات للموظفين:", { category, page, limit });
+
+    // ✅ البحث عن التصنيف بالاسم
+    let categoryName = category;
+
+    if (category && !isNaN(parseInt(category))) {
+      const cat = await prisma.categories.findUnique({
+        where: { id: parseInt(category) },
+      });
+      if (cat) {
+        categoryName = cat.name;
+      }
+    }
+
+    console.log(`🔍 البحث عن المنتجات في تصنيف: "${categoryName}" للموظفين`);
+
+    // ✅ 1. أولاً: جلب جميع المنتجات الخام مع فلترة
+    const allProductsRaw = await prisma.products.findMany({
       where: {
-        unique_id: { contains: "-0" },
-        cur_qty: { gt: 0 }, // ✅ فقط الكميات أكبر من صفر
-        stor_id: 0, // ✅ فقط من المخزن الرئيسي
-        ...(category && { group_name: { contains: category } }),
+        cur_qty: { gt: 0 },
+        stor_id: 0,
+        // ✅ فلترة حسب التصنيف
+        ...(categoryName && {
+          OR: [
+            { group_name: { contains: categoryName, mode: "insensitive" } },
+            { kind_name: { contains: categoryName, mode: "insensitive" } },
+            { item_name: { contains: categoryName, mode: "insensitive" } },
+          ],
+        }),
       },
       select: {
         unique_id: true,
@@ -31,34 +55,25 @@ export async function GET(request) {
         group_name: true,
         kind_name: true,
       },
-      take: 100,
+      orderBy: {
+        item_name: "asc",
+      },
     });
 
     console.log(
-      "📊 بيانات الموظفين - المنتجات المتاحة فقط:",
-      productsRaw.map((p) => ({
-        item_code: p.item_code,
-        color: p.color,
-        size: p.size,
-        item_name: p.item_name,
-        cur_qty: p.cur_qty,
-        stor_id: p.stor_id,
-      }))
+      `📊 جميع المنتجات الخام للموظفين: ${allProductsRaw.length} منتج`
     );
 
-    // جلب الفئات
-    const categories = await prisma.categories.findMany();
-
-    // ✅ تجميع المنتجات حسب master_code مع تجميع الكميات لكل لون ومقاس
+    // ✅ 2. تجميع المنتجات حسب master_code
     const groupedByMasterCode = {};
 
-    productsRaw.forEach((row) => {
+    allProductsRaw.forEach((row) => {
       const masterCode = row.master_code;
       if (!masterCode) return;
 
       const color = row.color || "Default";
       const size = row.size || "ONE SIZE";
-      const quantity = Number(row.cur_qty) || 0; // ✅ تحويل إلى رقم
+      const quantity = Number(row.cur_qty) || 0;
 
       if (!groupedByMasterCode[masterCode]) {
         groupedByMasterCode[masterCode] = {
@@ -75,7 +90,6 @@ export async function GET(request) {
         };
       }
 
-      // ✅ البحث عن variant بنفس اللون
       let variant = groupedByMasterCode[masterCode].variants.find(
         (v) => v.color === color
       );
@@ -93,66 +107,82 @@ export async function GET(request) {
           imageUrl: imageUrl,
           sizes: [],
           sizeItemCodes: {},
-          sizeQuantities: {}, // ✅ كميات كل مقاس
-          totalColorQuantity: 0, // ✅ سيتم تجميع الكميات هنا
+          sizeQuantities: {},
+          totalColorQuantity: 0,
           stor_id: row.stor_id || 0,
         };
         groupedByMasterCode[masterCode].variants.push(variant);
       }
 
-      // ✅ إضافة المقاس إذا لم يكن موجوداً
       if (size && !variant.sizes.includes(size)) {
         variant.sizes.push(size);
       }
 
-      // ✅ حفظ item_code والكمية للمقاس المحدد
       if (size) {
         variant.sizeItemCodes[size] = row.item_code;
-        
-        // ✅ جمع الكميات بدلاً من استبدالها للمقاسات المتكررة
         const currentSizeQty = variant.sizeQuantities[size] || 0;
         variant.sizeQuantities[size] = currentSizeQty + quantity;
       }
 
-      // ✅ تجميع الكميات لكل لون (مجموع جميع المقاسات)
       variant.totalColorQuantity += quantity;
     });
 
-    // ✅ تحديث cur_qty لكل variant ليكون المجموع الكلي
     Object.values(groupedByMasterCode).forEach((product) => {
       product.variants.forEach((variant) => {
         variant.cur_qty = variant.totalColorQuantity;
       });
     });
 
-    const finalProducts = Object.values(groupedByMasterCode).filter(
+    const allGroupedProducts = Object.values(groupedByMasterCode).filter(
       (product) => product.variants.length > 0
     );
 
     console.log(
-      "✅ المنتجات النهائية للموظفين (بعد التجميع الصحيح):",
-      finalProducts.map((p) => ({
-        modelId: p.modelId,
-        item_name: p.item_name,
-        variants: p.variants.map((v) => ({
-          color: v.color,
-          totalColorQuantity: v.totalColorQuantity, // ✅ المجموع الصحيح
-          sizes: v.sizes,
-          sizeQuantities: v.sizeQuantities, // ✅ كميات كل مقاس
-        })),
-      }))
+      `🎯 المنتجات بعد التجميع للموظفين: ${allGroupedProducts.length} موديل`
     );
 
+    // ✅ 3. حساب الترقيم
+    const totalProducts = allGroupedProducts.length;
+    const totalPages = Math.ceil(totalProducts / limit);
+    const skip = (page - 1) * limit;
+
+    const paginatedProducts = allGroupedProducts.slice(skip, skip + limit);
+
+    console.log(
+      `📄 الترقيم للموظفين: صفحة ${page} من ${totalPages}, عرض ${paginatedProducts.length} موديل`
+    );
+
+    const categories = await prisma.categories.findMany();
+    const hasNextPage = page < totalPages;
+    const hasPrevPage = page > 1;
+
     return NextResponse.json({
-      products: finalProducts,
+      products: paginatedProducts,
       categories: categories,
+      pagination: {
+        currentPage: page,
+        totalPages: totalPages,
+        totalProducts: totalProducts,
+        limit: limit,
+        hasNextPage: hasNextPage,
+        hasPrevPage: hasPrevPage,
+      },
     });
   } catch (error) {
     console.error("Error in employee products API:", error);
 
-    return NextResponse.json(
-      { error: "فشل في جلب البيانات من قاعدة البيانات" },
-      { status: 500 }
-    );
+    return NextResponse.json({
+      products: [],
+      categories: [],
+      pagination: {
+        currentPage: 1,
+        totalPages: 1,
+        totalProducts: 0,
+        limit: 20,
+        hasNextPage: false,
+        hasPrevPage: false,
+      },
+      error: "فشل في جلب البيانات من قاعدة البيانات",
+    });
   }
 }

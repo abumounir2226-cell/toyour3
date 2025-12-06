@@ -3,46 +3,78 @@ import { PrismaClient } from "@prisma/client";
 
 const prisma = new PrismaClient();
 
-// GET - جلب تصنيف محدد بواسطة الاسم
+// ✅ دالة مساعدة للبحث عن التصنيف بالـ ID أو الاسم
+async function findCategoryByIdOrName(identifier) {
+  // أولاً: تحقق إذا كان identifier رقم (ID)
+  const id = parseInt(identifier);
+  if (!isNaN(id)) {
+    const categoryById = await prisma.categories.findUnique({
+      where: { id: id },
+    });
+    if (categoryById) {
+      console.log("✅ وجدت التصنيف بالـ ID:", { id, name: categoryById.name });
+      return categoryById;
+    }
+  }
+
+  // ثانياً: البحث بالاسم
+  const categoryByName = await prisma.categories.findFirst({
+    where: {
+      name: {
+        equals: identifier,
+        mode: "insensitive",
+      },
+    },
+  });
+
+  if (categoryByName) {
+    console.log("✅ وجدت التصنيف بالاسم:", {
+      name: categoryByName.name,
+      id: categoryByName.id,
+    });
+    return categoryByName;
+  }
+
+  return null;
+}
+
+// GET - جلب تصنيف محدد بواسطة الاسم أو الـ ID
 export async function GET(request, { params }) {
   try {
-    const { name } = params;
-    const decodedName = decodeURIComponent(name);
+    const { id } = params;
+    const decodedIdentifier = decodeURIComponent(id);
 
-    console.log("🔍 البحث عن التصنيف بالاسم:", decodedName);
+    console.log("🔍 البحث عن التصنيف:", decodedIdentifier);
 
-    // ✅ البحث في قاعدة البيانات باستخدام الاسم
-    const category = await prisma.categories.findFirst({
-      where: { 
-        name: {
-          equals: decodedName,
-          mode: 'insensitive' // ✅ البحث غير حساس للحالة
-        }
-      },
-    });
-
-    console.log("📊 نتيجة البحث:", category);
+    // ✅ البحث باستخدام الدالة المساعدة
+    const category = await findCategoryByIdOrName(decodedIdentifier);
 
     if (!category) {
-      console.log("❌ التصنيف غير موجود:", decodedName);
-      
-      // ✅ محاولة البحث في جميع التصنيفات للتحقق
-      const allCategories = await prisma.categories.findMany();
-      console.log("📋 جميع التصنيفات المتاحة:", allCategories.map(c => c.name));
-      
+      console.log("❌ التصنيف غير موجود:", decodedIdentifier);
+
+      // ✅ عرض جميع التصنيفات المتاحة
+      const allCategories = await prisma.categories.findMany({
+        select: { id: true, name: true },
+        orderBy: { name: "asc" },
+      });
+
       return NextResponse.json(
-        { 
+        {
           error: "التصنيف غير موجود",
-          availableCategories: allCategories.map(c => c.name)
-        }, 
+          requestedId: decodedIdentifier,
+          availableCategories: allCategories.map((c) => ({
+            id: c.id,
+            name: c.name,
+          })),
+        },
         { status: 404 }
       );
     }
 
-    console.log("✅ التصنيف موجود:", category.name);
+    console.log("✅ التصنيف موجود:", category);
     return NextResponse.json(category);
   } catch (error) {
-    console.error("❌ Error fetching category by name:", error);
+    console.error("❌ Error fetching category:", error);
     return NextResponse.json(
       { error: "فشل في جلب بيانات التصنيف" },
       { status: 500 }
@@ -50,21 +82,14 @@ export async function GET(request, { params }) {
   }
 }
 
-// PUT - تحديث تصنيف محدد بواسطة الاسم
+// PUT - تحديث تصنيف محدد
 export async function PUT(request, { params }) {
   try {
-    const { name } = params;
-    const decodedName = decodeURIComponent(name);
+    const { id } = params;
+    const decodedIdentifier = decodeURIComponent(id);
     const data = await request.json();
 
-    const category = await prisma.categories.findFirst({
-      where: { 
-        name: {
-          equals: decodedName,
-          mode: 'insensitive'
-        }
-      },
-    });
+    const category = await findCategoryByIdOrName(decodedIdentifier);
 
     if (!category) {
       return NextResponse.json({ error: "التصنيف غير موجود" }, { status: 404 });
@@ -94,20 +119,13 @@ export async function PUT(request, { params }) {
   }
 }
 
-// DELETE - حذف تصنيف محدد بواسطة الاسم
+// DELETE - حذف تصنيف محدد
 export async function DELETE(request, { params }) {
   try {
-    const { name } = params;
-    const decodedName = decodeURIComponent(name);
+    const { id } = params;
+    const decodedIdentifier = decodeURIComponent(id);
 
-    const category = await prisma.categories.findFirst({
-      where: { 
-        name: {
-          equals: decodedName,
-          mode: 'insensitive'
-        }
-      },
-    });
+    const category = await findCategoryByIdOrName(decodedIdentifier);
 
     if (!category) {
       return NextResponse.json({ error: "التصنيف غير موجود" }, { status: 404 });

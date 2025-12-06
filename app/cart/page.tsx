@@ -3,7 +3,7 @@
 import Header from "../components/Header";
 import Link from "next/link";
 import { useCart } from "../../context/CartContext";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 
 export default function CartPage() {
   const { cartItems, updateQuantity, removeFromCart, getCartTotal, clearCart } =
@@ -12,7 +12,7 @@ export default function CartPage() {
   const [orderSuccess, setOrderSuccess] = useState(false);
   const [orderError, setOrderError] = useState("");
 
-  // بيانات العميل
+  // بيانات العميل - سيتم ملؤها تلقائياً
   const [customerData, setCustomerData] = useState({
     name: "",
     address: "",
@@ -24,8 +24,34 @@ export default function CartPage() {
   const tax = subtotal * 0.15;
   const total = subtotal + shipping + tax;
 
+  // ✅ جديد: جلب بيانات العميل من localStorage تلقائياً
+  useEffect(() => {
+    const loadCustomerData = () => {
+      try {
+        const customer = localStorage.getItem("customer");
+        const savedAddress = localStorage.getItem("customer_address");
+
+        if (customer) {
+          const customerData = JSON.parse(customer);
+          console.log("👤 بيانات العميل المحملة:", customerData);
+
+          setCustomerData({
+            name: customerData.username || "",
+            phone: customerData.phone || "",
+            address: savedAddress || "", // تحميل العنوان المحفوظ
+          });
+        }
+      } catch (error) {
+        console.error("Error loading customer data:", error);
+      }
+    };
+
+    loadCustomerData();
+  }, []);
+
   // ✅ دالة إرسال الطلب - محدثة
   const handleSubmitOrder = async () => {
+    // التحقق من اكتمال البيانات
     if (!customerData.name || !customerData.address || !customerData.phone) {
       setOrderError("يرجى ملء جميع بيانات العميل");
       return;
@@ -45,8 +71,8 @@ export default function CartPage() {
           price: item.price || 0,
           color: item.color,
           size: item.size,
-          item_code: item.item_code || item.master_code, // ✅ إرسال item_code الصحيح
-          master_code: item.master_code, // ✅ إرسال master_code أيضاً
+          item_code: item.item_code || item.master_code,
+          master_code: item.master_code,
         })),
         total_price: total,
       };
@@ -64,8 +90,11 @@ export default function CartPage() {
       const result = await response.json();
 
       if (result.success) {
+        // ✅ حفظ العنوان للطلبات القادمة
+        localStorage.setItem("customer_address", customerData.address);
+
         setOrderSuccess(true);
-        clearCart(); // إفراغ السلة بعد نجاح الطلب
+        clearCart();
       } else {
         setOrderError(result.error || "فشل في إرسال الطلب");
       }
@@ -205,7 +234,7 @@ export default function CartPage() {
               <div className="space-y-6">
                 {cartItems.map((item) => (
                   <div
-                    key={`${item.id}-${item.color}-${item.size}`} // ✅ مفتاح فريد
+                    key={`${item.id}-${item.color}-${item.size}`}
                     className="flex flex-col sm:flex-row gap-4 p-4 bg-gray-50 rounded-xl border border-gray-200 hover:border-blue-300 transition-all duration-300"
                   >
                     {/* صورة المنتج */}
@@ -228,7 +257,7 @@ export default function CartPage() {
                           {item.name}
                         </h3>
                         <button
-                          onClick={() => handleRemoveItem(item)} // ✅ استخدام الدالة المحدثة
+                          onClick={() => handleRemoveItem(item)}
                           className="text-gray-400 hover:text-red-500 transition-colors p-1"
                         >
                           <svg
@@ -281,7 +310,7 @@ export default function CartPage() {
                         <div className="flex items-center space-x-3 space-x-reverse">
                           <button
                             onClick={() =>
-                              updateQuantity(item.id, (item.quantity || 1) - 1) // ✅ استخدام id فقط
+                              updateQuantity(item.id, (item.quantity || 1) - 1)
                             }
                             className="w-8 h-8 flex items-center justify-center border border-gray-300 rounded-lg hover:bg-gray-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                             disabled={(item.quantity || 1) <= 1}
@@ -307,7 +336,7 @@ export default function CartPage() {
 
                           <button
                             onClick={() =>
-                              updateQuantity(item.id, (item.quantity || 1) + 1) // ✅ استخدام id فقط
+                              updateQuantity(item.id, (item.quantity || 1) + 1)
                             }
                             className="w-8 h-8 flex items-center justify-center border border-gray-300 rounded-lg hover:bg-gray-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                             disabled={
@@ -379,6 +408,30 @@ export default function CartPage() {
               <h2 className="text-xl font-bold text-gray-900 mb-6">
                 بيانات العميل
               </h2>
+
+              {/* ✅ جديد: رسالة توضيحية */}
+              {customerData.name && (
+                <div className="mb-6 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                  <div className="flex items-center space-x-2 space-x-reverse">
+                    <svg
+                      className="w-5 h-5 text-blue-600"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                      />
+                    </svg>
+                    <span className="text-blue-700 text-sm">
+                      تم تحميل بياناتك تلقائياً. يرجى التأكد من العنوان فقط.
+                    </span>
+                  </div>
+                </div>
+              )}
 
               {orderError && (
                 <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-6">
