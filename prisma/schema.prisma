@@ -106,4 +106,3 @@ model company_info {
   updated_at      DateTime @updatedAt
 
   @@map("company_info")
-}
