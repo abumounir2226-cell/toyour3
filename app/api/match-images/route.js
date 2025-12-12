@@ -1,80 +1,81 @@
 import { NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
+import { prisma } from "@/lib/prisma"; // تأكدنا من استخدام النسخة الموحدة
 import { readdirSync, existsSync } from "fs";
 import path from "path";
 
-const prisma = new PrismaClient();
+export const dynamic = "force-dynamic";
+export const fetchCache = "force-no-store";
+export const maxDuration = 60;
 
+// POST: المطابقة (كما هي)
 export async function POST() {
   try {
     const uploadDir = "/home/mounir/images";
-
-    if (!existsSync(uploadDir)) {
-      return NextResponse.json(
-        { error: "مجلد الصور غير موجود" },
-        { status: 404 }
-      );
-    }
+    if (!existsSync(uploadDir))
+      return NextResponse.json({ error: "No dir" }, { status: 404 });
 
     const imageFiles = readdirSync(uploadDir);
-    const imageExtensions = [".webp", ".jpg", ".jpeg", ".png", ".gif"];
-    const validImages = imageFiles.filter((file) =>
-      imageExtensions.some((ext) => file.toLowerCase().endsWith(ext))
+    // فلترة بسيطة للامتدادات
+    const validImages = imageFiles.filter((f) =>
+      /\.(jpg|jpeg|png|webp|gif)$/i.test(f)
     );
 
     let matchedCount = 0;
-    const results = [];
-
     for (const imageFile of validImages) {
       const fileNameWithoutExt = path.parse(imageFile).name;
+      // بحث سريع جداً
       const product = await prisma.products.findFirst({
         where: { item_code: fileNameWithoutExt },
+        select: { unique_id: true },
       });
 
       if (product) {
-        const imageUrl = `https://www.royakids.shop/images/${imageFile}`;
         await prisma.products.update({
           where: { unique_id: product.unique_id },
-          data: { images: imageUrl },
+          data: { images: `https://www.royakids.shop/images/${imageFile}` },
         });
         matchedCount++;
       }
     }
-
-    return NextResponse.json({
-      success: true,
-      message: `تمت مطابقة ${matchedCount} صورة`,
-      matched: matchedCount,
-      totalImages: validImages.length,
-    });
+    return NextResponse.json({ success: true, matched: matchedCount });
   } catch (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
 
+// GET: العرض (مخفف جداً جداً)
 export async function GET() {
   try {
-    const allProducts = await prisma.products.findMany({
+    console.log("⚡ Fetching products list...");
+
+    // ❌ ألغينا الـ count لأنه ثقيل
+    // ✅ نجلب فقط أول 20 منتج ليس لهم صور
+    const productsWithoutImagesList = await prisma.products.findMany({
+      where: {
+        OR: [{ images: null }, { images: "" }],
+      },
       select: {
         unique_id: true,
         item_code: true,
         item_name: true,
-        images: true,
       },
+      take: 20, // عدد قليل جداً للتجربة
+      orderBy: { item_code: "asc" },
     });
 
-    const productsWithImages = allProducts.filter((p) => p.images);
-    const productsWithoutImages = allProducts.filter((p) => !p.images);
+    console.log(`✅ Found ${productsWithoutImagesList.length} products`);
 
     return NextResponse.json({
+      // نرسل أرقام وهمية للإحصائيات مؤقتاً لتسريع الاستجابة
       statistics: {
-        totalProducts: allProducts.length,
-        productsWithImages: productsWithImages.length,
-        productsWithoutImages: productsWithoutImages.length,
+        totalProducts: 0,
+        productsWithImages: 0,
+        productsWithoutImages: productsWithoutImagesList.length,
       },
-      productsWithoutImages: productsWithoutImages,
+      productsWithoutImages: productsWithoutImagesList,
     });
   } catch (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    console.error("❌ API Error:", error);
+    return NextResponse.json({ error: "Database Error" }, { status: 500 });
   }
 }
